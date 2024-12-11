@@ -1,21 +1,23 @@
-#include <cereal/archives/json.hpp>
-#include <cereal/types/string.hpp>
-#include <cereal/types/map.hpp>
-#include <fstream>
-#include <sstream>
 #include <iostream>
+#include <mysql_driver.h>
+#include <mysql_connection.h>
+#include <cppconn/prepared_statement.h>
+#include <cppconn/exception.h>
+#include "bcrypt/BCrypt.hpp"
+#include <string>
+#include <cereal/types/string.hpp>
 #include <cereal/archives/json.hpp>
+#include <sstream>
 
-// Request and response structures
+// Define the request and response structures for the protocol
 struct CreateAccountWeb {
     long requestId;
     std::string email;
     std::string plaintextPassword;
 
-    template<class Archive>
-    void serialize(Archive& ar) {
-        // Ensure correct field names
-        ar(CEREAL_NVP(requestId), CEREAL_NVP(email), CEREAL_NVP(plaintextPassword));
+    template <class Archive>
+    void serialize(Archive& archive) {
+        archive(requestId, email, plaintextPassword);
     }
 };
 
@@ -23,35 +25,30 @@ struct CreateAccountWebSuccess {
     long requestId;
     long userId;
 
-    template<class Archive>
-    void serialize(Archive& ar) {
-        ar(requestId, userId);
+    template <class Archive>
+    void serialize(Archive& archive) {
+        archive(requestId, userId);
     }
 };
 
 struct CreateAccountWebFailure {
     long requestId;
-    enum Reason {
-        ACCOUNT_ALREADY_EXISTS,
-        INVALID_PASSWORD,
-        INTERNAL_SERVER_ERROR
-    } reason;
+    enum Reason { ACCOUNT_ALREADY_EXISTS, INVALID_PASSWORD, INTERNAL_SERVER_ERROR } reason;
 
-    template<class Archive>
-    void serialize(Archive& ar) {
-        ar(requestId, reason);
+    template <class Archive>
+    void serialize(Archive& archive) {
+        archive(requestId, reason);
     }
 };
 
-// Authentication Request and Response structures
 struct AuthenticateWeb {
     long requestId;
     std::string email;
     std::string plaintextPassword;
 
-    template<class Archive>
-    void serialize(Archive& ar) {
-        ar(requestId, email, plaintextPassword);
+    template <class Archive>
+    void serialize(Archive& archive) {
+        archive(requestId, email, plaintextPassword);
     }
 };
 
@@ -60,82 +57,168 @@ struct AuthenticateWebSuccess {
     long userId;
     std::string creationDate;
 
-    template<class Archive>
-    void serialize(Archive& ar) {
-        // Ensure correct field names
-        ar(CEREAL_NVP(requestId), CEREAL_NVP(userId), CEREAL_NVP(creationDate));
+    template <class Archive>
+    void serialize(Archive& archive) {
+        archive(requestId, userId, creationDate);
     }
 };
 
 struct AuthenticateWebFailure {
     long requestId;
-    enum Reason {
-        INVALID_CREDENTIALS,
-        INTERNAL_SERVER_ERROR
-    } reason;
+    enum Reason { INVALID_CREDENTIALS, INTERNAL_SERVER_ERROR } reason;
 
-    template<class Archive>
-    void serialize(Archive& ar) {
-        ar(requestId, reason);
+    template <class Archive>
+    void serialize(Archive& archive) {
+        archive(requestId, reason);
     }
 };
 
-// Serialization and Deserialization Functions
-// Serialization and Deserialization Functions
-void serializeRequest(const CreateAccountWeb& request) {
-    std::stringstream ss;
-    cereal::JSONOutputArchive archive(ss);
-    archive(request);
+// Function to register user
+void registerUser(sql::Connection* con, const std::string& username, const std::string& password) {
+    try {
+        std::string passwordHash = BCrypt::generateHash(password);
+        sql::PreparedStatement* prepstmt = con->prepareStatement(
+            "INSERT INTO users (username, hashed_password, last_login) VALUES (?, ?, NULL)");
 
-    std::cout << "Serialized Request: " << ss.str() << std::endl;
+        prepstmt->setString(1, username);
+        prepstmt->setString(2, passwordHash);
+
+        prepstmt->executeUpdate();
+
+        std::cout << "New user registered successfully!" << std::endl;
+        delete prepstmt;
+    }
+    catch (sql::SQLException& e) {
+        if (e.getErrorCode() == 1062) {
+            std::cout << "Error: Username already exists." << std::endl;
+        }
+        else {
+            std::cout << "SQL ERROR during registration: " << e.what() << std::endl;
+        }
+    }
 }
 
-void deserializeRequest(const std::string& json) {
-    std::stringstream ss(json);
-    cereal::JSONInputArchive archive(ss);
-    CreateAccountWeb request;
-    archive(request);
+// Function to verify user login
+bool verifyUser(sql::Connection* con, const std::string& username, const std::string& password) {
+    try {
+        sql::PreparedStatement* prepstmt = con->prepareStatement(
+            "SELECT hashed_password FROM users WHERE username = ?");
 
-    std::cout << "Deserialized Request: "
-        << "Email: " << request.email
-        << ", Password: " << request.plaintextPassword << std::endl;
+        prepstmt->setString(1, username);
+
+        sql::ResultSet* res = prepstmt->executeQuery();
+
+        if (res->next()) {
+            std::string storedHash = res->getString("hashed_password");
+            if (BCrypt::validatePassword(password, storedHash)) {
+                std::cout << "Authentication successful!" << std::endl;
+
+                sql::PreparedStatement* updateStmt = con->prepareStatement(
+                    "UPDATE users SET last_login = CURRENT_TIMESTAMP WHERE username = ?");
+                updateStmt->setString(1, username);
+                updateStmt->executeUpdate();
+
+                delete updateStmt;
+                delete res;
+                delete prepstmt;
+
+                return true;
+            }
+            else {
+                std::cout << "Authentication Failed: Incorrect Password" << std::endl;
+                delete res;
+                delete prepstmt;
+                return false;
+            }
+        }
+        else {
+            std::cout << "Authentication Failed: User Not Found" << std::endl;
+            delete res;
+            delete prepstmt;
+            return false;
+        }
+    }
+    catch (sql::SQLException& e) {
+        std::cout << "SQL ERROR during authentication: " << e.what() << std::endl;
+        return false;
+    }
 }
 
-void serializeAuthenticateResponse(const AuthenticateWebSuccess& response) {
-    std::stringstream ss;
-    cereal::JSONOutputArchive archive(ss);
-    archive(response);
-
-    std::cout << "Serialized Authentication Success Response: " << ss.str() << std::endl;
-}
-
-void deserializeAuthenticateResponse(const std::string& json) {
-    std::stringstream ss(json);
-    cereal::JSONInputArchive archive(ss);
-    AuthenticateWebSuccess response;
-    archive(response);
-
-    std::cout << "Deserialized Authentication Success Response: "
-        << "UserID: " << response.userId
-        << ", Creation Date: " << response.creationDate << std::endl;
+// Serialization utility function
+template <class T>
+std::string serializeToJson(const T& obj) {
+    std::ostringstream os;
+    {
+        cereal::JSONOutputArchive archive(os);
+        archive(obj);  // Serialize the object
+    }
+    return os.str();
 }
 
 int main() {
-    // CreateAccountWeb example request
-    CreateAccountWeb request = { 1, "user@example.com", "password123" };
-    serializeRequest(request);
+    sql::mysql::MySQL_Driver* driver = sql::mysql::get_mysql_driver_instance();
+    sql::Connection* con = nullptr;
 
-    // Simulated JSON request (Valid JSON format)
-    std::string json = R"({"requestId":1,"email":"user@example.com","plaintextPassword":"password123"})";
-    deserializeRequest(json);
+    try {
+        driver = sql::mysql::get_mysql_driver_instance();
+        con = driver->connect("tcp://127.0.0.1:3305", "root", "root");
 
-    // AuthenticateWebSuccess example response
-    AuthenticateWebSuccess authSuccessResponse = { 1, 12345, "2024-12-10" };
-    serializeAuthenticateResponse(authSuccessResponse);
+        if (con->isValid()) {
+            std::cout << "Connected to MySQL!" << std::endl;
+        }
 
-    // Simulated JSON response (Valid JSON format)
-    std::string authJson = R"({"requestId":1,"userId":12345,"creationDate":"2024-12-10"})";
-    deserializeAuthenticateResponse(authJson);
+        con->setSchema("authenticationdb");
 
+        while (true) {
+            std::cout << "Enter command (1: Register, 2: Authenticate, 3: Exit): ";
+            int choice;
+            std::cin >> choice;
+
+            if (choice == 1) {
+                std::string username, password;
+                std::cout << "Enter username: ";
+                std::cin >> username;
+                std::cout << "Enter password: ";
+                std::cin >> password;
+
+                registerUser(con, username, password);
+
+                // Example of serializing the CreateAccountWeb response
+                CreateAccountWeb response;
+                response.requestId = 123;  // Example requestId
+                response.email = username;
+                response.plaintextPassword = password;
+
+                std::string serializedResponse = serializeToJson(response);
+                std::cout << "Serialized response: " << serializedResponse << std::endl;
+            }
+            else if (choice == 2) {
+                std::string username, password;
+                std::cout << "Enter username: ";
+                std::cin >> username;
+                std::cout << "Enter password: ";
+                std::cin >> password;
+
+                if (verifyUser(con, username, password)) {
+                    std::cout << "User authenticated and last_login updated." << std::endl;
+                }
+                else {
+                    std::cout << "Authentication failed." << std::endl;
+                }
+            }
+            else if (choice == 3) {
+                break;
+            }
+            else {
+                std::cout << "Invalid command. Please try again." << std::endl;
+            }
+        }
+
+    }
+    catch (sql::SQLException& e) {
+        std::cout << "SQL ERROR: " << e.what() << std::endl;
+    }
+
+    delete con;
     return 0;
 }
