@@ -6,214 +6,283 @@
 #include "bcrypt/BCrypt.hpp"
 #include <string>
 #include <winsock2.h>
+#include <cppconn/resultset.h>
 
-//#pragma comment(lib, "ws2_32.lib")  // Link Winsock library
-//
-//// Function to connect to MySQL database
-//sql::Connection* connectToDatabase() {
-//    sql::mysql::MySQL_Driver* driver = sql::mysql::get_mysql_driver_instance();
-//    sql::Connection* con = driver->connect("tcp://127.0.0.1:3305", "root", "root");  // Adjust your DB credentials
-//    con->setSchema("authenticationdb");
-//    return con;
-//}
-//
-//// Function to register a user in the database
-//void registerUser(sql::Connection* con, const std::string& username, const std::string& password) {
-//    try {
-//        // Hash the password using bcrypt
+void registerUser(sql::Connection* con, const std::string& username, const std::string& password) {
+    try {
+        // Generate a hashed password using BCrypt
+        std::string passwordHash = BCrypt::generateHash(password);
+
+        // Prepare the SQL statement
+        sql::PreparedStatement* prepstmt = con->prepareStatement(
+            "INSERT INTO users (username, hashed_password, last_login) VALUES (?, ?, NULL)");
+
+        // Set the prepared statement parameters
+        prepstmt->setString(1, username);             // Insert the provided username
+        prepstmt->setString(2, passwordHash);         // Insert the hashed password
+
+        // Execute the statement
+        prepstmt->executeUpdate();
+
+        std::cout << "New user registered successfully!" << std::endl;
+
+        // Clean up
+        delete prepstmt;
+    }
+    catch (sql::SQLException& e) {
+        std::cout << "SQL ERROR during registration: " << e.what() << std::endl;
+    }
+}
+
+bool verifyUser(sql::Connection* con, const std::string& username, const std::string& password) {
+    try {
+        // Prepare the SQL statement to fetch the hashed password for the given username
+        sql::PreparedStatement* prepstmt = con->prepareStatement(
+            "SELECT hashed_password FROM users WHERE username = ?");
+
+        // Set the username parameter
+        prepstmt->setString(1, username);
+
+        // Execute the query
+        sql::ResultSet* res = prepstmt->executeQuery();
+
+        // Check if a result is available
+        if (res->next()) {
+            // Retrieve the hashed password from the result set
+            std::string storedHash = res->getString("hashed_password");
+
+            // Validate the provided password against the stored hash
+            if (BCrypt::validatePassword(password, storedHash)) {
+                std::cout << "Authentication successful!" << std::endl;
+
+                // Update the last_login timestamp
+                sql::PreparedStatement* updateStmt = con->prepareStatement(
+                    "UPDATE users SET last_login = CURRENT_TIMESTAMP WHERE username = ?");
+                updateStmt->setString(1, username);
+                updateStmt->executeUpdate();
+
+                // Clean up
+                delete updateStmt;
+                delete res;
+                delete prepstmt;
+
+                return true;
+            }
+            else {
+                std::cout << "Authentication Failed: Incorrect Password" << std::endl;
+
+                // Clean up
+                delete res;
+                delete prepstmt;
+
+                return false;
+            }
+        }
+        else {
+            std::cout << "Authentication Failed: User Not Found" << std::endl;
+
+            // Clean up
+            delete res;
+            delete prepstmt;
+
+            return false;
+        }
+    }
+    catch (sql::SQLException& e) {
+        std::cout << "SQL ERROR during authentication: " << e.what() << std::endl;
+        return false;
+    }
+}
+
+int main() {
+    sql::mysql::MySQL_Driver* driver = sql::mysql::get_mysql_driver_instance();
+    sql::Connection* con = nullptr;
+
+    try {
+        // Connect to the database
+        driver = sql::mysql::get_mysql_driver_instance();
+        con = driver->connect("tcp://127.0.0.1:3305", "root", "root");
+
+        if (con->isValid()) {
+            std::cout << "Connected to MySQL!" << std::endl;
+        }
+
+        // Select the schema
+        con->setSchema("authenticationdb");
+
+        // Test: Register a new user
+        // registerUser(con, "Roger", "12345");
+
+        // Test: Verify the registered user
+        if (verifyUser(con, "Roger", "12345")) {
+            std::cout << "User authenticated and last_login updated." << std::endl;
+        }
+        else {
+            std::cout << "Authentication failed." << std::endl;
+        }
+
+    }
+    catch (sql::SQLException& e) {
+        std::cout << "SQL ERROR: " << e.what() << std::endl;
+    }
+
+    // Clean up
+    delete con;
+    return 0;
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+//void registerUser(sql::Connection* con, const std::string& username, const std::string& password)
+//{
+//    try
+//    {
+//        // Generate a hashed password using BCrypt
 //        std::string passwordHash = BCrypt::generateHash(password);
 //
-//        // Prepare SQL statement to insert user into the database
+//        // Prepare the SQL statement
 //        sql::PreparedStatement* prepstmt = con->prepareStatement(
-//            "INSERT INTO users (username, password_hash) VALUES (?, ?)"
-//        );
-//        prepstmt->setString(1, username);
-//        prepstmt->setString(2, passwordHash);
+//            "INSERT INTO users (username, hashed_password, last_login) VALUES (?, ?, ?)");
+//
+//        // Set the prepared statement parameters
+//        prepstmt->setString(1, username);             // Insert the provided username
+//        prepstmt->setString(2, passwordHash);         // Insert the hashed password
+//        prepstmt->setString(3, "2024-12-11 03:33:00"); // Insert the last login timestamp
+//
+//        // Execute the statement
 //        prepstmt->executeUpdate();
 //
-//        std::cout << "User registered successfully" << std::endl;
+//        std::cout << "New record inserted successfully." << std::endl;
+//
+//        // Clean up
+//        delete prepstmt;
 //    }
-//    catch (sql::SQLException& e) {
-//        std::cerr << "MySQL Error: " << e.what() << std::endl;
+//    catch (sql::SQLException& e)
+//    {
+//        std::cout << "SQL ERROR: " << e.what() << std::endl;
 //    }
 //}
 //
-//// Function to verify the user's credentials during login
-//bool verifyUser(sql::Connection* con, const std::string& username, const std::string& password) {
-//    try {
-//        // Prepare SQL statement to retrieve the user's password hash from the database
+//
+//
+//bool verifyUser(sql::Connection* con, const std::string& username, const std::string& password)
+//{
+//    try
+//    {
+//        // Prepare the SQL statement to fetch the hashed password for the given username
 //        sql::PreparedStatement* prepstmt = con->prepareStatement(
-//            "SELECT password_hash FROM users WHERE username = ?"
-//        );
+//            "SELECT hashed_password FROM users WHERE username = ?");
+//
+//        // Set the username parameter
 //        prepstmt->setString(1, username);
 //
+//        // Execute the query
 //        sql::ResultSet* res = prepstmt->executeQuery();
 //
-//        if (res->next()) {
-//            std::string storedHash = res->getString("password_hash");
+//        // Check if a result is available
+//        if (res->next())
+//        {
+//            // Retrieve the hashed password from the result set
+//            std::string storedHash = res->getString("hashed_password");
 //
-//            // Validate password hash with bcrypt
-//            if (BCrypt::validatePassword(password, storedHash)) {
+//            // Validate the provided password against the stored hash
+//            if (BCrypt::validatePassword(password, storedHash))
+//            {
 //                std::cout << "Authentication successful!" << std::endl;
+//
+//                // Clean up
+//                delete res;
+//                delete prepstmt;
+//
 //                return true;
 //            }
-//            else {
-//                std::cout << "Authentication failed." << std::endl;
+//            else
+//            {
+//                std::cout << "Authentication Failed: Incorrect Password" << std::endl;
+//
+//                // Clean up
+//                delete res;
+//                delete prepstmt;
+//
 //                return false;
 //            }
 //        }
-//        else {
-//            std::cout << "User not found." << std::endl;
+//        else
+//        {
+//            std::cout << "Authentication Failed: User Not Found" << std::endl;
+//
+//            // Clean up
+//            delete res;
+//            delete prepstmt;
+//
 //            return false;
 //        }
 //    }
-//    catch (sql::SQLException& e) {
-//        std::cerr << "MySQL Error: " << e.what() << std::endl;
+//    catch (sql::SQLException& e)
+//    {
+//        std::cout << "SQL ERROR: " << e.what() << std::endl;
 //        return false;
 //    }
 //}
 //
-//// Winsock setup to initialize the server
-//void initWinsock() {
-//    WSADATA wsaData;
-//    WSAStartup(MAKEWORD(2, 2), &wsaData);
-//}
 //
-//// Function to create and bind the server socket
-//SOCKET createServerSocket(int port) {
-//    SOCKET serverSocket = socket(AF_INET, SOCK_STREAM, 0);
-//    if (serverSocket == INVALID_SOCKET) {
-//        std::cerr << "Error creating socket!" << std::endl;
-//        exit(1);
-//    }
+//int main()
+//{
+//    sql::mysql::MySQL_Driver* driver = sql::mysql::get_mysql_driver_instance();
+//    sql::Connection* con = nullptr;
 //
-//    sockaddr_in serverAddress;
-//    serverAddress.sin_family = AF_INET;
-//    serverAddress.sin_port = htons(port);
-//    serverAddress.sin_addr.s_addr = INADDR_ANY;
+//    try
+//    {
+//        // Connect to the database
+//        driver = sql::mysql::get_mysql_driver_instance();
+//        con = driver->connect("tcp://127.0.0.1:3305", "root", "root");
 //
-//    if (bind(serverSocket, (sockaddr*)&serverAddress, sizeof(serverAddress)) == SOCKET_ERROR) {
-//        std::cerr << "Error binding socket!" << std::endl;
-//        exit(1);
-//    }
-//
-//    if (listen(serverSocket, SOMAXCONN) == SOCKET_ERROR) {
-//        std::cerr << "Error listening on socket!" << std::endl;
-//        exit(1);
-//    }
-//
-//    return serverSocket;
-//}
-//
-//// Function to accept a new client connection
-//SOCKET acceptConnection(SOCKET serverSocket) {
-//    sockaddr_in clientAddress;
-//    int clientSize = sizeof(clientAddress);
-//    SOCKET clientSocket = accept(serverSocket, (sockaddr*)&clientAddress, &clientSize);
-//    if (clientSocket == INVALID_SOCKET) {
-//        std::cerr << "Error accepting connection!" << std::endl;
-//        exit(1);
-//    }
-//    return clientSocket;
-//}
-//
-//// Main function where the server logic runs
-//int main() {
-//    initWinsock();
-//
-//    // Set up the server to listen on port 12345
-//    SOCKET serverSocket = createServerSocket(12345);
-//    SOCKET clientSocket;
-//
-//    sql::Connection* con = connectToDatabase();
-//
-//    while (true) {
-//        // Accept incoming client connections
-//        clientSocket = acceptConnection(serverSocket);
-//
-//        // Dummy logic to simulate client communication for testing
-//        // In practice, you'd read from the socket, process the request, and then respond accordingly
-//
-//        // Simulate user registration (In real code, handle client request and input)
-//        std::string username = "testuser";
-//        std::string password = "hashedpassword";
-//        registerUser(con, username, password);
-//
-//        // Simulate user authentication (In real code, handle client request and input)
-//        bool isAuthenticated = verifyUser(con, username, password);
-//        if (isAuthenticated) {
-//            std::cout << "User authenticated!" << std::endl;
-//        }
-//        else {
-//            std::cout << "User authentication failed!" << std::endl;
+//        if (con->isValid())
+//        {
+//            std::cout << "Connect to MySQL!!!" << std::endl;
 //        }
 //
-//        // Close the client connection (for simplicity, not handling socket communication in this example)
-//        closesocket(clientSocket);
+//        // Select the schema
+//        con->setSchema("authenticationdb");
+//
+//        // Test: Register a new user
+//        //registerUser(con, "Roger", "12345");
+//
+//        // Test: Verify the registered user
+//        verifyUser(con, "Roger", "12345");
+//
+//    }
+//    catch (sql::SQLException& e)
+//    {
+//        std::cout << "SQL ERROR: " << e.what() << std::endl;
 //    }
 //
-//    // Clean up and close the server socket
-//    closesocket(serverSocket);
-//    WSACleanup();
-//
+//    // Clean up
+//    delete con;
 //    return 0;
 //}
 
 
-int main() {
-
-    sql::mysql::MySQL_Driver* driver = sql::mysql::get_mysql_driver_instance();
-    sql::Connection* con = nullptr;
-    sql::Statement* stmt = nullptr;
-    sql::ResultSet* res = nullptr;
-    sql::PreparedStatement* prepstmt = nullptr;
-
-    try
-    {
-        driver = sql::mysql::get_mysql_driver_instance();
-
-        con = driver->connect("tcp://127.0.0.1:3305", "root", "root");
-
-        if (con->isValid())
-        {
-            std::cout << "Connect to MySQL!!!" << std::endl;
-        }
-
-        con->setSchema("authenticationdb");
-
-        stmt = con->createStatement();
-
-        // Use the correct table 'users'
-        res = stmt->executeQuery("SELECT id, username FROM users");
-
-        while (res->next())
-        {
-            std::cout << "ID: " << res->getInt("id") << ", Username: " << res->getString("username") << std::endl;
-        }
-
-        prepstmt = con->prepareStatement("INSERT INTO users (username, salt, hashed_password, last_login) VALUES (?, ?, ?, ?)");
-        prepstmt->setString(1, "newuser");                  // username
-        prepstmt->setString(2, "new salt");              // salt
-        prepstmt->setString(3, "new password");          // hashed_password
-        prepstmt->setString(4, "2024-12-11 03:33:00");     // last_login (use correct timestamp format)
-        prepstmt->executeUpdate();
-
-        std::cout << "New record inserted successfully " << std::endl;
-
-        res = stmt->executeQuery("SELECT id, username FROM users");
-
-        while (res->next())
-        {
-            std::cout << "ID: " << res->getInt("id") << ", Username: " << res->getString("username") << std::endl;
-        }
-
-    }
-    catch (sql::SQLException e)
-    {
-        std::cout << "SQL ERROR: " << e.what() << std::endl;
-    }
-
-    delete con, stmt, res;
-
-    return 0;
-}
